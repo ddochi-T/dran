@@ -47,12 +47,24 @@ st.markdown(
 # -------------------------- Firebase 초기화 -------------------------- #
 @st.cache_resource(show_spinner=False)
 def init_db():
-    cred = credentials.Certificate(st.secrets["FIREBASE_SERVICE_ACCOUNT"])  # type: ignore
+    import json
+
+    raw = st.secrets.get("FIREBASE_SERVICE_ACCOUNT")
+    # 1) 멀티라인 JSON 문자열 형태로 넣었을 때
+    if isinstance(raw, str):
+        service_account_info = json.loads(raw)
+    else:
+        # 2) TOML 테이블([FIREBASE_SERVICE_ACCOUNT])로 넣었을 때
+        #    Streamlit이 MappingProxy 등으로 줄 수 있어 dict(...)로 강제 변환
+        service_account_info = dict(raw)
+
+    cred = credentials.Certificate(service_account_info)
     if not firebase_admin._apps:
         firebase_admin.initialize_app(cred)
     return firestore.client()
 
 db = init_db()
+
 
 # -------------------------- 상수/유틸 -------------------------- #
 KST = ZoneInfo(st.secrets.get("TIMEZONE", "Asia/Seoul"))
