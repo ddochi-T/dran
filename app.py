@@ -122,12 +122,35 @@ def hash_pin(pin: str) -> str:
 # -------------------------- 설정/배정표 -------------------------- #
 @st.cache_data(show_spinner=False)
 def load_settings() -> Dict:
+    import json
+
+    # 1) secrets에서 원본 추출
+    raw_cfg = st.secrets.get("CLASSES_PER_GRADE", {str(i): 6 for i in range(1, 7)})
+
+    # 2) 문자열(JSON)로 들어온 경우
+    if isinstance(raw_cfg, str):
+        try:
+            parsed = json.loads(raw_cfg)
+        except Exception:
+            # 문자열인데 JSON이 아니면 기본값 사용
+            parsed = {str(i): 6 for i in range(1, 7)}
+    else:
+        # 3) TOML 테이블 등 매핑 객체 → 일단 dict로 캐스팅
+        parsed = dict(raw_cfg)
+
+    # 4) Firestore가 이해할 수 있도록 "키=문자열, 값=int" 로 정규화
+    classes_per_grade = {str(k): int(parsed[k]) for k in parsed.keys()}
+
+    # 5) settings 문서가 없다면 기본값 저장(순수 dict만 사용!)
     doc = db.collection("config").document("settings").get()
     if doc.exists:
-        return doc.to_dict() or {}
-    defaults = {"classes_per_grade": st.secrets.get("CLASSES_PER_GRADE", {str(i): 6 for i in range(1, 7)})}
-    db.collection("config").document("settings").set(defaults)
-    return defaults
+        data = doc.to_dict() or {}
+        return {"classes_per_grade": {**classes_per_grade, **data.get("classes_per_grade", {})}}
+    else:
+        defaults = {"classes_per_grade": classes_per_grade}
+        db.collection("config").document("settings").set(defaults)
+        return defaults
+
 
 @st.cache_data(show_spinner=False)
 def load_assignments() -> Dict[str, int]:
