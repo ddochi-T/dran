@@ -325,7 +325,7 @@ if mode == "예약하기":
         row = st.columns([1] + [2] * 5)
         with row[0]:
             s, e = per_table[p]
-            st.markdown(f"**{p}교시**
+            st.markdown(f"**{p}교시**\n\n<span class='small'>{format_hhmm(s)}–{format_hhmm(e)}</span>", unsafe_allow_html=True)
 
 <span class='small'>{format_hhmm(s)}–{format_hhmm(e)}</span>", unsafe_allow_html=True)
         for i, d in enumerate(days, start=1):
