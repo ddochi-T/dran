@@ -1,43 +1,15 @@
 """
 뜨란채 예약 시스템 (Streamlit + Firebase Firestore)
 --------------------------------------------------
-요구 조건 (업데이트 적용):
-- 모든 요일 1~6교시 표시(항상 6교시). 단, **수요일 6교시 예약 불가**.
-- 전주 목요일 07:00(KST) 비배정학년 오픈 규칙 유지, 모달에 안내 문구 표기.
-- 비배정학년이 예약 시도 시, **언제 이후 예약 가능한지** 안내.
-- 주별 배정학년은 코드에 **기본 표(이미지 기준 1~21주 시퀀스)**로 내장. (관리자에서 DB값으로 덮어쓰기 가능)
-- 2025-09-01 ~ 2025-09-10 **여름방학**: 전 슬롯을 빨간 글씨로 표시하고 예약 차단.
-- 한 슬롯에는 1학급만 예약(트랜잭션). PIN(숫자 4자리)으로 삭제 검증.
-- 관리자: 제한 무시 예약/삭제, 학급 수 설정, 데이터 내보내기.
-- 배포: 깃허브에 올린 `app.py`를 Streamlit에서 가져와 실행.
-
-⚙️ 사전 준비(필수)
-- Streamlit Cloud/서버 `st.secrets` 설정:
-
-[[secrets.toml 예시]]
-FIREBASE_SERVICE_ACCOUNT = {  # 서비스 계정 JSON 그대로
-  "type": "service_account",
-  "project_id": "your-project-id",
-  "private_key_id": "...",
-  "private_key": "-----BEGIN PRIVATE KEY-----
-...
------END PRIVATE KEY-----
-",
-  "client_email": "firebase-adminsdk@your-project-id.iam.gserviceaccount.com",
-  "client_id": "..."
-}
-ADMIN_PASSWORD = "trran-admin-0000"
-TIMEZONE = "Asia/Seoul"
-CLASSES_PER_GRADE = {"1": 6, "2": 6, "3": 6, "4": 6, "5": 6, "6": 6}
-
-Firestore 구조
-- config/settings
-  { classes_per_grade: {"1":6,...} }
-- config/weekly_assignments
-  { "YYYY-MM-DD": 3, ... }  # 해당 주 월요일 → 배정학년
-- reservations/{slot_id}
-  slot_id 예: "2025-09-15_P3"
-
+요구·패치 종합 버전
+- 항상 6교시 표시, **수요일 6교시 예약 불가**
+- **2025-09-01 ~ 2025-09-10** 여름방학: 모든 칸 빨간 글씨로 차단
+- 예약 버튼 → **모달 팝업**으로 최종 확인
+- 비배정학년은 **전주 목요일 07:00(KST)** 이후만 예약 가능(모달·상단 모두 안내)
+- 배정표는 코드에 **기본 시퀀스 내장**(첨부표 기반). DB에 저장하면 덮어쓰기
+- **관리자 모드**: 강제 예약/삭제, 학급 수 설정, 데이터 내보내기
+- **관리자 차단 기능**: 셀 클릭→사유 입력→예약 차단, 사유는 빨간 글씨로 표시 (컬렉션 `blocks`)
+- GitHub → Streamlit 배포 전제(secrets 사용)
 """
 from __future__ import annotations
 
@@ -49,14 +21,13 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
-# Firebase
 import firebase_admin
 from firebase_admin import credentials, firestore
 
 try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
+    from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover
-    from pytz import timezone as ZoneInfo  # fallback
+    from pytz import timezone as ZoneInfo
 
 # ----------------------------- 기본 설정 ----------------------------- #
 st.set_page_config(page_title="뜨란채 예약 시스템", layout="wide")
@@ -64,13 +35,10 @@ st.markdown(
     """
     <style>
       .small {font-size:0.85rem;color:#666}
-      .muted {color:#888}
       .badge {background:#eef;border:1px solid #ccd;border-radius:6px;padding:2px 6px;margin-left:6px}
       .reserved {background:#f9f9ff;border:1px solid #dfe3ff;border-radius:8px;padding:8px}
       .open {background:#f6fff6;border:1px solid #cfe8cf;border-radius:8px;padding:8px}
       .blocked {background:#fff6f6;border:1px solid #ffd7d7;border-radius:8px;padding:8px;opacity:0.95}
-      .cell-btn {width:100%}
-      .titlebar {display:flex; gap:8px; align-items:center}
     </style>
     """,
     unsafe_allow_html=True,
@@ -86,10 +54,21 @@ def init_db():
 
 db = init_db()
 
-# -------------------------- 유틸 / 도메인 로직 -------------------------- #
+# -------------------------- 상수/유틸 -------------------------- #
 KST = ZoneInfo(st.secrets.get("TIMEZONE", "Asia/Seoul"))
 SUMMER_BREAK_START = date(2025, 9, 1)
 SUMMER_BREAK_END = date(2025, 9, 10)
+
+@dataclass
+class Slot:
+    day: date
+    period: int
+    start: time
+    end: time
+
+    @property
+    def id(self) -> str:
+        return f"{self.day.isoformat()}_P{self.period}"
 
 
 def kst_now() -> datetime:
@@ -104,49 +83,8 @@ def format_hhmm(t: time) -> str:
     return f"{t.hour:02d}:{t.minute:02d}"
 
 
-def open_time_for_week(monday: date) -> datetime:
-    """비배정학년 예약 오픈 = 해당 주의 전주 목요일 07:00 (KST)"""
-    prev_thu = monday - timedelta(days=4)  # 월요일-4=목
-    return datetime.combine(prev_thu, time(7, 0), tzinfo=KST)
-
-
-@st.cache_data(show_spinner=False)
-def load_settings() -> Dict:
-    doc = db.collection("config").document("settings").get()
-    if doc.exists:
-        return doc.to_dict() or {}
-    defaults = {"classes_per_grade": st.secrets.get("CLASSES_PER_GRADE", {str(i): 6 for i in range(1, 7)})}
-    db.collection("config").document("settings").set(defaults)
-    return defaults
-
-
-@st.cache_data(show_spinner=False)
-def load_assignments() -> Dict[str, int]:
-    doc = db.collection("config").document("weekly_assignments").get()
-    if doc.exists:
-        data = doc.to_dict() or {}
-        return {k: int(v) for k, v in data.items()}
-    return {}
-
-# 기본 배정표 (첨부 표 기준 1~21주 시퀀스)
-ASSIGN_DEFAULT_SEQUENCE = [1, 1, 1, 2, None, 2, 3, 3, 6, 5, 4, 1, 1, 2, 2, 3, 3, 4, 5, 6, 6]
-ASSIGN_DEFAULT_START = date(2025, 9, 8)  # 학기 첫 월요일(표의 1주차 포함 주)
-ASSIGN_DEFAULTS: Dict[str, int] = {}
-for i, g in enumerate(ASSIGN_DEFAULT_SEQUENCE):
-    monday_i = ASSIGN_DEFAULT_START + timedelta(weeks=i)
-    if g is not None:
-        ASSIGN_DEFAULTS[monday_i.isoformat()] = g
-
-SETTINGS = load_settings()
-ASSIGN = {**ASSIGN_DEFAULTS, **load_assignments()}  # DB 값이 있으면 우선
-
-
-def assigned_grade_for_week(monday: date) -> Optional[int]:
-    return ASSIGN.get(monday.isoformat())
-
-
 def build_period_table(max_periods: int = 6) -> Dict[int, Tuple[time, time]]:
-    """교시별 시작/종료 시각 계산: 시작 08:50, 수업 40분, 쉬는 10분, 6교시까지 고정"""
+    """시작 08:50, 수업 40분, 쉬는 10분, 6교시까지."""
     start = datetime.combine(date.today(), time(8, 50))
     periods: Dict[int, Tuple[time, time]] = {}
     cur = start
@@ -160,37 +98,56 @@ def build_period_table(max_periods: int = 6) -> Dict[int, Tuple[time, time]]:
     return periods
 
 
+def open_time_for_week(monday: date) -> datetime:
+    """비배정학년 오픈 = 전주 목요일 07:00 KST."""
+    prev_thu = monday - timedelta(days=4)
+    return datetime.combine(prev_thu, time(7, 0), tzinfo=KST)
+
+
 def hash_pin(pin: str) -> str:
     return hashlib.sha256(pin.encode()).hexdigest()
 
+# -------------------------- 설정/배정표 -------------------------- #
+@st.cache_data(show_spinner=False)
+def load_settings() -> Dict:
+    doc = db.collection("config").document("settings").get()
+    if doc.exists:
+        return doc.to_dict() or {}
+    defaults = {"classes_per_grade": st.secrets.get("CLASSES_PER_GRADE", {str(i): 6 for i in range(1, 7)})}
+    db.collection("config").document("settings").set(defaults)
+    return defaults
 
-@dataclass
-class Slot:
-    day: date
-    period: int
-    start: time
-    end: time
+@st.cache_data(show_spinner=False)
+def load_assignments() -> Dict[str, int]:
+    doc = db.collection("config").document("weekly_assignments").get()
+    if doc.exists:
+        data = doc.to_dict() or {}
+        return {k: int(v) for k, v in data.items()}
+    return {}
 
-    @property
-    def id(self) -> str:
-        return f"{self.day.isoformat()}_P{self.period}"
+# 첨부표를 코드 기본값으로 내장 (1~21주 시퀀스)
+ASSIGN_DEFAULT_SEQUENCE = [1, 1, 1, 2, None, 2, 3, 3, 6, 5, 4, 1, 1, 2, 2, 3, 3, 4, 5, 6, 6]
+ASSIGN_DEFAULT_START = date(2025, 9, 8)  # 표 기준 첫 월요일
+ASSIGN_DEFAULTS: Dict[str, int] = {}
+for i, g in enumerate(ASSIGN_DEFAULT_SEQUENCE):
+    monday_i = ASSIGN_DEFAULT_START + timedelta(weeks=i)
+    if g is not None:
+        ASSIGN_DEFAULTS[monday_i.isoformat()] = g
+
+SETTINGS = load_settings()
+ASSIGN = {**ASSIGN_DEFAULTS, **load_assignments()}  # DB 값이 우선
 
 
-def week_slots(monday: date, max_periods: int = 6) -> List[Slot]:
-    per_table = build_period_table(max_periods)
-    days = [monday + timedelta(days=i) for i in range(5)]  # 월~금
-    slots: List[Slot] = []
-    for d in days:
-        for p, (s, e) in per_table.items():
-            slots.append(Slot(d, p, s, e))
-    return slots
+def assigned_grade_for_week(monday: date) -> Optional[int]:
+    return ASSIGN.get(monday.isoformat())
 
+# -------------------------- DB helpers -------------------------- #
 
 def get_reservation(slot_id: str):
     return db.collection("reservations").document(slot_id).get()
 
 
-def put_reservation(slot: Slot, grade: int, class_no: int, purpose: str, pin: str, *, force: bool = False) -> Tuple[bool, str]:
+def put_reservation(slot: Slot, grade: int, class_no: int, purpose: str, pin: str, *, force: bool = False):
     doc_ref = db.collection("reservations").document(slot.id)
 
     def txn_op(txn):
@@ -218,7 +175,7 @@ def put_reservation(slot: Slot, grade: int, class_no: int, purpose: str, pin: st
         return False, str(e)
 
 
-def delete_reservation(slot_id: str, pin: Optional[str] = None, *, admin: bool = False) -> Tuple[bool, str]:
+def delete_reservation(slot_id: str, pin: Optional[str] = None, *, admin: bool = False):
     doc_ref = db.collection("reservations").document(slot_id)
     snap = doc_ref.get()
     if not snap.exists:
@@ -232,11 +189,36 @@ def delete_reservation(slot_id: str, pin: Optional[str] = None, *, admin: bool =
     doc_ref.delete()
     return True, "예약이 삭제되었습니다."
 
+# ------- 관리자 차단(별도 컬렉션 blocks) ------- #
+
+def get_block(slot_id: str):
+    snap = db.collection("blocks").document(slot_id).get()
+    return snap.to_dict() if snap.exists else None
+
+
+def set_block(slot: Slot, reason: str, admin_name: str = ""):
+    payload = {
+        "date": slot.day.isoformat(),
+        "period": slot.period,
+        "reason": reason.strip(),
+        "admin": admin_name.strip(),
+        "created_at": firestore.SERVER_TIMESTAMP,
+    }
+    db.collection("blocks").document(slot.id).set(payload)
+    return True, "해당 슬롯을 차단했습니다."
+
+
+def clear_block(slot_id: str):
+    ref = db.collection("blocks").document(slot_id)
+    if ref.get().exists:
+        ref.delete()
+        return True, "차단을 해제했습니다."
+    return False, "차단 상태가 아닙니다."
 
 # ------------------------------- UI ------------------------------- #
 st.title("뜨란채 예약 시스템")
 
-# Sidebar: 주 선택 & 모드
+# Sidebar
 with st.sidebar:
     today = kst_now().date()
     pick_date = st.date_input("주 선택 (해당 주의 아무 날짜)", value=today)
@@ -262,19 +244,10 @@ with st.sidebar:
     else:
         st.caption("관리자 전용 기능은 비밀번호 필요")
 
-# 학년/반 드롭다운
-classes_per_grade: Dict[str, int] = load_settings().get("classes_per_grade", {str(i): 6 for i in range(1, 7)})
+# 학급수
+classes_per_grade: Dict[str, int] = SETTINGS.get("classes_per_grade", {str(i): 6 for i in range(1, 7)})
 
-# 주간 슬롯(항상 6교시)
-slots = week_slots(monday, 6)
-
-# 기존 예약 로드
-reservations: Dict[str, Dict] = {}
-for s in slots:
-    snap = get_reservation(s.id)
-    if snap.exists:
-        reservations[s.id] = snap.to_dict() or {}
-
+# 예약 가능 판단
 
 def can_book(user_grade: int) -> Tuple[bool, str]:
     if is_admin:
@@ -286,7 +259,10 @@ def can_book(user_grade: int) -> Tuple[bool, str]:
         return True, "비배정학년 예약 오픈 기간"
     return False, f"비배정학년은 {open_dt.strftime('%m/%d %H:%M')} 이후 예약 가능"
 
-# ---------------------------- 메인 화면 ---------------------------- #
+# 주간 슬롯 구성(6교시 고정)
+per_table = build_period_table(6)
+days = [monday + timedelta(days=i) for i in range(5)]
+
 if mode == "예약하기":
     st.subheader(f"주간 예약표 · {monday.strftime('%Y-%m-%d')} ~ {(monday + timedelta(days=4)).strftime('%Y-%m-%d')}")
 
@@ -311,7 +287,7 @@ if mode == "예약하기":
         else:
             st.error(msg)
 
-    days = [monday + timedelta(days=i) for i in range(5)]
+    # 헤더
     header_cols = st.columns([1] + [2] * 5)
     with header_cols[0]:
         st.markdown("**교시/요일**")
@@ -320,37 +296,48 @@ if mode == "예약하기":
             label = d.strftime("%m/%d(%a)")
             st.markdown(f"**{label}**")
 
-    per_table = build_period_table(6)
     for p in range(1, 7):
         row = st.columns([1] + [2] * 5)
         with row[0]:
             s, e = per_table[p]
-            st.markdown(f"**{p}교시**
+            st.markdown(
+                f"""**{p}교시**
 
-<span class='small'>{format_hhmm(s)}-{format_hhmm(e)}</span>", unsafe_allow_html=True)
+<span class='small'>{format_hhmm(s)}-{format_hhmm(e)}</span>""",
+                unsafe_allow_html=True,
+            )
         for i, d in enumerate(days, start=1):
             slot = Slot(d, p, *per_table[p])
-            data = reservations.get(slot.id)
+            data = get_reservation(slot.id).to_dict() if get_reservation(slot.id).exists else None
+            block = get_block(slot.id)
             with row[i]:
-                # 여름방학 차단
+                # 여름방학
                 if SUMMER_BREAK_START <= d <= SUMMER_BREAK_END:
-                    st.markdown("<div class='blocked' style='border-color:#ffb3b3'><b style='color:#d00'>여름방학</b></div>", unsafe_allow_html=True)
-                    st.button("예약", key=f"vac_{d}_P{p}", disabled=True, use_container_width=True)
+                    st.markdown("<div class='blocked'><b style='color:#d00'>여름방학</b></div>", unsafe_allow_html=True)
+                    st.button("예약", key=f"vac_{slot.id}", disabled=True, use_container_width=True)
                     continue
                 # 수요일 6교시 차단
                 if d.weekday() == 2 and p == 6:
                     st.markdown("<div class='blocked'><b>수요일 6교시 예약 불가</b></div>", unsafe_allow_html=True)
-                    st.button("예약", key=f"w6_{d}_P{p}", disabled=True, use_container_width=True)
+                    st.button("예약", key=f"wed6_{slot.id}", disabled=True, use_container_width=True)
                     continue
-
+                # 관리자 차단
+                if block:
+                    st.markdown(
+                        f"<div class='blocked'><b style='color:#d00'>{block.get('reason','관리자 차단')}</b></div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.button("예약", key=f"blocked_{slot.id}", disabled=True, use_container_width=True)
+                    if is_admin and st.button("차단 해제", key=f"ub_{slot.id}", use_container_width=True):
+                        ok, m = clear_block(slot.id)
+                        st.toast(m)
+                        st.rerun()
+                    continue
+                # 예약됨
                 if data:
                     st.markdown(
-                        f"<div class='reserved'>
-"
-                        f"<b>{data.get('grade')}학년 {data.get('class_no')}반</b><span class='badge'>{data.get('purpose')}</span><br>"
-                        f"<span class='small'>예약됨</span>
-"
-                        f"</div>",
+                        f"<div class='reserved'><b>{data.get('grade')}학년 {data.get('class_no')}반</b>"
+                        f" <span class='badge'>{data.get('purpose')}</span></div>",
                         unsafe_allow_html=True,
                     )
                     del_key = f"del_{slot.id}"
@@ -367,24 +354,21 @@ if mode == "예약하기":
                                     st.toast(m)
                                     st.rerun()
                 else:
+                    # 비어 있음
                     ok, reason = can_book(int(sel_grade))
                     disabled = not ok or not purpose or not (pin and pin.isdigit() and len(pin) == 4)
                     style = "open" if ok else "blocked"
                     st.markdown(
-                        f"<div class='{style}'>"
-                        f"<span class='small'>{format_hhmm(slot.start)}-{format_hhmm(slot.end)}</span>"
-                        f"</div>",
+                        f"<div class='{style}'><span class='small'>{format_hhmm(slot.start)}-{format_hhmm(slot.end)}</span></div>",
                         unsafe_allow_html=True,
                     )
                     if st.button("예약", key=f"book_{slot.id}", disabled=disabled, use_container_width=True):
-                        # 모달 팝업에서 최종 확인 및 안내
                         with st.modal("예약 확인"):
                             st.markdown(f"**{d.strftime('%Y-%m-%d (%a)')} · {p}교시**")
                             st.caption(f"시간: {format_hhmm(slot.start)}-{format_hhmm(slot.end)}")
                             st.write(f"학년/반: **{sel_grade}학년 {sel_class}반**")
                             st.write(f"사용 목적: **{purpose}**")
                             if not ok:
-                                # 비배정학년 안내 문구 강화
                                 st.error(reason)
                             else:
                                 st.success("예약이 가능합니다.")
@@ -392,6 +376,16 @@ if mode == "예약하기":
                                 ok2, m2 = put_reservation(slot, int(sel_grade), int(sel_class), purpose, pin, force=is_admin)
                                 st.toast(m2)
                                 st.rerun()
+                    # 관리자 차단 버튼
+                    if is_admin:
+                        if st.button("관리자 차단", key=f"blk_{slot.id}", use_container_width=True):
+                            with st.modal("해당 교시 차단"):
+                                reason_txt = st.text_area("차단 사유(필수)", placeholder="예: 행사/점검 등")
+                                who = st.text_input("관리자 이름(선택)")
+                                if st.button("차단 적용", key=f"blk_apply_{slot.id}", disabled=not reason_txt.strip()):
+                                    okb, mb = set_block(slot, reason_txt, who)
+                                    st.toast(mb)
+                                    st.rerun()
 
 elif mode == "내 예약 관리":
     st.subheader("내 예약 확인/삭제")
@@ -437,15 +431,12 @@ else:  # 관리자
     if not (admin_pw and is_admin):
         st.error("관리자 비밀번호가 필요합니다.")
     else:
-        # 고정 배정표 미리보기
+        # 배정표 미리보기
         st.markdown("### 주별 배정학년(기본값 + DB 덮어쓰기)")
         if ASSIGN:
-            view = pd.DataFrame(
-                sorted([(k, v) for k, v in ASSIGN.items()], key=lambda x: x[0]),
-                columns=["monday", "grade"],
-            )
+            view = pd.DataFrame(sorted([(k, v) for k, v in ASSIGN.items()], key=lambda x: x[0]), columns=["monday", "grade"])
             st.dataframe(view, use_container_width=True, hide_index=True)
-            st.caption("※ 코드 내 기본값을 포함해 표시합니다. DB에 저장하면 해당 주는 덮어써집니다.")
+            st.caption("※ 코드 내 기본값을 포함해 표시합니다. DB에 저장하면 해당 주는 덮어씁니다.")
         else:
             st.info("배정표가 없습니다.")
 
@@ -475,7 +466,7 @@ else:  # 관리자
         with colD:
             ad_pin = st.text_input("비밀번호(4자리)", max_chars=4, key="ad_pin")
 
-        ad_day = st.date_input("날짜(월~금)", value=monday)
+        ad_day = st.date_input("날짜(월~금)", value=week_monday(kst_now().date()))
         ad_period = st.number_input("교시(1~6)", min_value=1, max_value=6, value=1)
         per_table_all = build_period_table(6)
         s_t, e_t = per_table_all[int(ad_period)]
@@ -526,7 +517,7 @@ st.markdown(
     • 모든 날은 1~6교시까지 표시되며, **수요일 6교시**는 예약이 불가합니다.  
     • 비배정학년은 전주 **목요일 07:00(KST)**부터 예약할 수 있습니다.  
     • 2025-09-01 ~ 2025-09-10은 **여름방학**으로 전 슬롯 예약이 차단됩니다.  
-    • 깃허브에 `app.py`를 올리고 Streamlit에서 GitHub 연결로 실행하세요 (secrets는 프로젝트 설정에 등록).  
-    • DB에 `weekly_assignments` 문서를 저장하면 코드 내 기본 배정표를 덮어쓸 수 있습니다.
+    • GitHub에 `app.py`를 올리고 Streamlit에서 GitHub 연결로 실행하세요 (secrets는 프로젝트 설정에 등록).  
+    • DB의 `weekly_assignments`를 저장하면 코드 내 기본 배정표를 덮어쓸 수 있고, `blocks` 컬렉션으로 관리자 차단을 관리합니다.
     """
 )
