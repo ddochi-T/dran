@@ -325,9 +325,9 @@ if mode == "예약하기":
         row = st.columns([1] + [2] * 5)
         with row[0]:
             s, e = per_table[p]
-            st.markdown(f"**{p}교시**\n\n<span class='small'>{format_hhmm(s)}–{format_hhmm(e)}</span>", unsafe_allow_html=True)
+            st.markdown(f"**{p}교시**
 
-<span class='small'>{format_hhmm(s)}–{format_hhmm(e)}</span>", unsafe_allow_html=True)
+<span class='small'>{format_hhmm(s)}-{format_hhmm(e)}</span>", unsafe_allow_html=True)
         for i, d in enumerate(days, start=1):
             slot = Slot(d, p, *per_table[p])
             data = reservations.get(slot.id)
@@ -372,7 +372,7 @@ if mode == "예약하기":
                     style = "open" if ok else "blocked"
                     st.markdown(
                         f"<div class='{style}'>"
-                        f"<span class='small'>{format_hhmm(slot.start)}–{format_hhmm(slot.end)}</span>"
+                        f"<span class='small'>{format_hhmm(slot.start)}-{format_hhmm(slot.end)}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
@@ -380,7 +380,7 @@ if mode == "예약하기":
                         # 모달 팝업에서 최종 확인 및 안내
                         with st.modal("예약 확인"):
                             st.markdown(f"**{d.strftime('%Y-%m-%d (%a)')} · {p}교시**")
-                            st.caption(f"시간: {format_hhmm(slot.start)}–{format_hhmm(slot.end)}")
+                            st.caption(f"시간: {format_hhmm(slot.start)}-{format_hhmm(slot.end)}")
                             st.write(f"학년/반: **{sel_grade}학년 {sel_class}반**")
                             st.write(f"사용 목적: **{purpose}**")
                             if not ok:
@@ -480,7 +480,7 @@ else:  # 관리자
         per_table_all = build_period_table(6)
         s_t, e_t = per_table_all[int(ad_period)]
         ad_slot = Slot(ad_day, int(ad_period), s_t, e_t)
-        st.caption(f"선택 슬롯: {ad_slot.id} | {format_hhmm(s_t)}–{format_hhmm(e_t)}")
+        st.caption(f"선택 슬롯: {ad_slot.id} | {format_hhmm(s_t)}-{format_hhmm(e_t)}")
         c1, c2 = st.columns(2)
         with c1:
             if st.button("관리자 예약 강제 등록"):
