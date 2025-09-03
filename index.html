@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>뜨란채 예약 시스템</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Noto Sans KR', sans-serif; }
+    .custom-scrollbar::-webkit-scrollbar{width:6px;height:6px}
+    .custom-scrollbar::-webkit-scrollbar-track{background:#f1f1f1;border-radius:10px}
+    .custom-scrollbar::-webkit-scrollbar-thumb{background:#888;border-radius:10px}
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover{background:#555}
+    .modal-backdrop,#loading-overlay{transition:opacity .3s ease}
+    .disabled-slot{background:#f3f4f6;color:#6b7280;cursor:not-allowed}
+    .loader{border:4px solid #f3f3f3;border-top:4px solid #3498db;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite}
+    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800 flex items-center justify-center min-h-screen p-4">
+
+  <!-- 로딩 오버레이 -->
+  <div id="loading-overlay" class="fixed inset-0 bg-white flex flex-col items-center justify-center z-50">
+    <div class="loader"></div>
+    <p class="text-lg font-semibold text-gray-700 mt-4">뜨란채 예약 시스템 접속 중입니다.</p>
+  </div>
+
+  <div class="w-full max-w-7xl bg-white rounded-2xl shadow-lg p-6 md:p-8">
+    <!-- 헤더 -->
+    <header class="mb-6">
+      <div class="relative text-center">
+        <h1 class="text-3xl font-bold text-gray-800 mb-2">뜨란채 예약 시스템</h1>
+        <button id="admin-login-button" class="absolute top-0 right-0 p-2 text-gray-400 hover:text-gray-600 transition-colors" title="관리자 로그인">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+          </svg>
+        </button>
+      </div>
+      <p class="text-center text-gray-500 mb-2">원하는 시간표의 칸을 눌러 예약하세요. (+ 버튼)</p>
+      <div id="admin-indicator" class="hidden text-center mb-2">
+        <span class="inline-block bg-green-100 text-green-800 text-sm font-medium px-3 py-1 rounded-full cursor-pointer" title="클릭하여 관리자 모드 종료">관리자 모드</span>
+      </div>
+
+      <!-- 안내사항 -->
+      <div class="max-w-3xl mx-auto mt-4 mb-6 bg-blue-50 border-l-4 border-blue-400 p-4 rounded-r-lg">
+        <div class="flex">
+          <div class="flex-shrink-0">
+            <svg class="h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+            </svg>
+          </div>
+          <div class="ml-3">
+            <div class="text-base text-blue-800 space-y-1">
+              <p>1. <strong>배정 학년은 언제든 예약 가능</strong>합니다.</p>
+              <p>2. 배정 학년 외 타 학년은 전 주 <strong>목요일 오전 7시</strong>부터 예약 가능합니다.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex flex-col md:flex-row justify-between items-center gap-4">
+        <div class="flex items-center gap-2">
+          <button id="prev-week" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition-colors duration-300" aria-label="이전 주">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+          </button>
+          <h2 id="current-week" class="text-xl font-semibold w-48 text-center"></h2>
+          <button id="next-week" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition-colors duration-300" aria-label="다음 주">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
+          </button>
+        </div>
+        <div class="flex items-center gap-3 bg-indigo-100 text-indigo-800 font-bold px-4 py-2 rounded-lg">
+          <span>이번 주 배정 학년:</span>
+          <span id="assigned-grade"></span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 캘린더 -->
+    <div class="overflow-x-auto custom-scrollbar">
+      <table class="w-full min-w-[800px] border-collapse text-center table-fixed">
+        <thead id="calendar-head"></thead>
+        <tbody id="calendar-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 예약 모달 -->
+  <div id="reservation-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center p-4 modal-backdrop">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-8 transform transition-transform duration-300 scale-95">
+      <h3 class="text-2xl font-bold mb-2">뜨란채 예약</h3>
+      <p id="modal-datetime" class="text-gray-600 mb-2"></p>
+
+      <!-- 힌트 -->
+      <div id="booking-hint" class="mb-4 hidden">
+        <div class="rounded-md bg-indigo-50 text-indigo-700 text-sm px-3 py-2 leading-relaxed">
+          <span id="booking-hint-text"></span>
+        </div>
+      </div>
+
+      <form id="reservation-form">
+        <input type="hidden" id="modal-date">
+        <input type="hidden" id="modal-period">
+
+        <div class="mb-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label for="grade-select" class="block text-sm font-medium text-gray-700 mb-1">학년</label>
+            <select id="grade-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+              <option value="1">1학년</option><option value="2">2학년</option><option value="3">3학년</option>
+              <option value="4">4학년</option><option value="5">5학년</option><option value="6">6학년</option>
+            </select>
+          </div>
+          <div>
+            <label for="class-select" class="block text-sm font-medium text-gray-700 mb-1">반</label>
+            <select id="class-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+              <option value="1">1반</option><option value="2">2반</option><option value="3">3반</option>
+              <option value="4">4반</option><option value="5">5반</option><option value="6">6반</option>
+              <option value="7">7반</option><option value="etc">기타</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="class-input-etc-container" class="mb-4 hidden">
+          <label for="class-input-etc" class="block text-sm font-medium text-gray-700 mb-1">반 이름 (직접 입력)</label>
+          <input type="text" id="class-input-etc" placeholder="예: 방송반" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+
+        <div class="mb-4">
+          <label for="purpose" class="block text-sm font-medium text-gray-700 mb-1">사용 목적</label>
+          <input type="text" id="purpose" placeholder="예: 체육수업" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+        </div>
+
+        <div class="mb-6">
+          <label for="password" class="block text-sm font-medium text-gray-700 mb-1">비밀번호 (숫자 4자리)</label>
+          <input type="tel" id="password" placeholder="삭제 확인을 위함" maxlength="4" pattern="[0-9]{4}" title="숫자 4자리를 입력하세요." class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+        </div>
+
+        <div class="flex justify-end gap-3">
+          <button type="button" id="cancel-button" class="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors">취소</button>
+          <button type="submit" class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">예약하기</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 삭제 모달 -->
+  <div id="delete-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center p-4 modal-backdrop">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-8 transform transition-transform duration-300 scale-95">
+      <h3 class="text-2xl font-bold mb-2">예약 삭제</h3>
+      <div class="bg-gray-100 p-4 rounded-lg mb-6 text-gray-700">
+        <p><strong class="font-semibold">시간:</strong> <span id="delete-modal-datetime"></span></p>
+        <p><strong class="font-semibold">학년반:</strong> <span id="delete-modal-grade-class"></span></p>
+        <p><strong class="font-semibold">목적:</strong> <span id="delete-modal-purpose"></span></p>
+      </div>
+      <form id="delete-form">
+        <input type="hidden" id="delete-modal-date">
+        <input type="hidden" id="delete-modal-period">
+        <div class="mb-6">
+          <label for="delete-password" class="block text-sm font-medium text-gray-700 mb-1">비밀번호 (숫자 4자리)</label>
+          <input type="tel" id="delete-password" placeholder="예약 시 입력한 비밀번호" maxlength="4" pattern="[0-9]{4}" title="숫자 4자리를 입력하세요." class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" required>
+        </div>
+        <div class="flex justify-end gap-3">
+          <button type="button" id="delete-cancel-button" class="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors">취소</button>
+          <button type="submit" class="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">삭제하기</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 관리자 로그인 모달 -->
+  <div id="admin-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center p-4 modal-backdrop">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-8 transform transition-transform duration-300 scale-95">
+      <h3 class="text-2xl font-bold mb-4 text-center">관리자 로그인</h3>
+      <form id="admin-form">
+        <div class="mb-4">
+          <label for="admin-password" class="block text-sm font-medium text-gray-700 mb-1">관리자 암호</label>
+          <input type="password" id="admin-password" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+        </div>
+        <div class="flex justify-end gap-3">
+          <button type="button" id="admin-cancel-button" class="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors">취소</button>
+          <button type="submit" class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">로그인</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 알림 모달 -->
+  <div id="alert-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center p-4 modal-backdrop">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-8 transform transition-transform duration-300 scale-95 text-center">
+      <div id="alert-message" class="text-gray-800 text-lg mb-6"></div>
+      <button id="alert-close-button" class="px-8 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">확인</button>
+    </div>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script>window.__app_id = 'dran-auditorium-reservation';</script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDocFromServer } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+    // 🔐 Firebase Web SDK 설정 (dran-aad51 프로젝트 값으로 교체)
+    // Firebase 콘솔 → 프로젝트 설정 → '내 앱' → Web 앱에서 아래 값을 복사해 붙여넣으세요.
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      projectId: "dran-aad51",
+      storageBucket: "dran-aad51.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    // ------------------- 앱 상태 ------------------- //
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+    const reservationsCol = collection(db, `artifacts/${appId}/public/data/reservations`);
+
+    document.addEventListener('DOMContentLoaded', () => {
+      // --- 상태
+      let currentDate = new Date('2025-09-01'); // 9/1~9/10은 방학 처리
+      let reservations = {};
+      let isAdmin = false;
+      const ADMIN_PASSWORD = "school0000";
+
+      // --- DOM
+      const loadingOverlay = document.getElementById('loading-overlay');
+      const currentWeekEl = document.getElementById('current-week');
+      const calendarHeadEl = document.getElementById('calendar-head');
+      const calendarBodyEl = document.getElementById('calendar-body');
+      const assignedGradeEl = document.getElementById('assigned-grade');
+      const prevWeekBtn = document.getElementById('prev-week');
+      const nextWeekBtn = document.getElementById('next-week');
+
+      const reservationModal = document.getElementById('reservation-modal');
+      const modalDatetimeEl = document.getElementById('modal-datetime');
+      const modalDateInput = document.getElementById('modal-date');
+      const modalPeriodInput = document.getElementById('modal-period');
+      const gradeSelect = document.getElementById('grade-select');
+      const classSelect = document.getElementById('class-select');
+      const classInputEtcContainer = document.getElementById('class-input-etc-container');
+      const classInputEtc = document.getElementById('class-input-etc');
+      const purposeInput = document.getElementById('purpose');
+      const passwordInput = document.getElementById('password');
+      const reservationForm = document.getElementById('reservation-form');
+      const cancelButton = document.getElementById('cancel-button');
+
+      const deleteModal = document.getElementById('delete-modal');
+      const deleteModalDatetimeEl = document.getElementById('delete-modal-datetime');
+      const deleteModalGradeClassEl = document.getElementById('delete-modal-grade-class');
+      const deleteModalPurposeEl = document.getElementById('delete-modal-purpose');
+      const deleteModalDateInput = document.getElementById('delete-modal-date');
+      const deleteModalPeriodInput = document.getElementById('delete-modal-period');
+      const deletePasswordInput = document.getElementById('delete-password');
+      const deleteForm = document.getElementById('delete-form');
+      const deleteCancelButton = document.getElementById('delete-cancel-button');
+
+      const adminModal = document.getElementById('admin-modal');
+      const adminLoginButton = document.getElementById('admin-login-button');
+      const adminForm = document.getElementById('admin-form');
+      const adminPasswordInput = document.getElementById('admin-password');
+      const adminCancelButton = document.getElementById('admin-cancel-button');
+      const adminIndicator = document.getElementById('admin-indicator');
+
+      const alertModal = document.getElementById('alert-modal');
+      const alertMessageEl = document.getElementById('alert-message');
+      const alertCloseButton = document.getElementById('alert-close-button');
+
+      // 힌트 DOM
+      const bookingHintWrapEl = document.getElementById('booking-hint');
+      const bookingHintTextEl = document.getElementById('booking-hint-text');
+
+      // ------------------- 주 배정표 (첨부표 반영) ------------------- //
+      // 2025-09-08(월) 시작, 21주 시퀀스: [1,1,1,2,null,2,3,3,6,5,4,1,1,2,2,3,3,4,5,6,6]
+      const gradeAssignments = {
+        '2025-09-08': 1, '2025-09-15': 1, '2025-09-22': 1, '2025-09-29': 2,
+        '2025-10-06': null, '2025-10-13': 2, '2025-10-20': 3, '2025-10-27': 3,
+        '2025-11-03': 6, '2025-11-10': 5, '2025-11-17': 4, '2025-11-24': 1,
+        '2025-12-01': 1, '2025-12-08': 2, '2025-12-15': 2, '2025-12-22': 3,
+        '2025-12-29': 3, '2026-01-05': 4, '2026-01-12': 5, '2026-01-19': 6,
+        '2026-01-26': 6
+      };
+
+      // 공휴일/휴업일 (필요 시 자유 수정)
+      const holidays = {
+        '2025-09-01':'여름방학','2025-09-02':'여름방학','2025-09-03':'여름방학','2025-09-04':'여름방학','2025-09-05':'여름방학',
+        '2025-09-08':'여름방학','2025-09-09':'여름방학','2025-09-10':'여름방학',
+        '2025-10-03':'개천절','2025-10-06':'추석연휴','2025-10-07':'추석연휴','2025-10-08':'추석연휴',
+        '2025-10-09':'한글날','2025-10-10':'자율휴업일','2025-12-25':'크리스마스','2026-01-01':'새해 첫날'
+      };
+
+      // 교시표(배정학년에 따라 점심 위치/쉬는시간 반영)
+      const timetables = {
+        '1-2':['1교시 (08:50~09:30)','2교시 (09:40~10:20)','3교시 (10:30~11:10)','점심 (11:10~11:50)','4교시 (11:50~12:30)','5교시 (12:40~13:20)','6교시 (13:30~14:10)'],
+        '3-4':['1교시 (08:50~09:30)','2교시 (09:40~10:20)','3교시 (10:30~11:10)','4교시 (11:20~12:00)','점심 (12:00~12:40)','5교시 (12:40~13:20)','6교시 (13:30~14:10)'],
+        '5-6':['1교시 (08:50~09:30)','2교시 (09:40~10:20)','3교시 (10:30~11:10)','4교시 (11:20~12:00)','5교시 (12:10~12:50)','점심 (12:50~13:30)','6교시 (13:30~14:10)'],
+      };
+      const daysOfWeek = ['월','화','수','목','금'];
+
+      // ------------------- 유틸 ------------------- //
+      const formatDate = (date) => {
+        const y = date.getFullYear();
+        const m = String(date.getMonth()+1).padStart(2,'0');
+        const d = String(date.getDate()).padStart(2,'0');
+        return `${y}-${m}-${d}`;
+      };
+      const getMonday = (date) => {
+        const d = new Date(date);
+        const day = d.getDay(); // 0(일)~6(토)
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        return new Date(d);
+      };
+      const getAssignedGrade = (date) => {
+        const monday = getMonday(date);
+        const dateString = formatDate(monday);
+        return gradeAssignments[dateString] ?? null;
+      };
+      const getOpenBookingDate = (date) => {
+        const monday = getMonday(date);
+        const open = new Date(monday);
+        open.setDate(monday.getDate() - 4); // 전주 목요일
+        open.setHours(7,0,0,0);
+        return open;
+      };
+
+      const updateBookingHint = () => {
+        if (!bookingHintWrapEl || !bookingHintTextEl || !modalDateInput || !gradeSelect) return;
+        const selectedDateStr = modalDateInput.value;
+        if (!selectedDateStr) { bookingHintWrapEl.classList.add('hidden'); return; }
+
+        const selectedDate  = new Date(selectedDateStr);
+        const assignedGrade = getAssignedGrade(selectedDate);
+        const selectedGrade = parseInt(gradeSelect.value);
+        const open          = getOpenBookingDate(selectedDate);
+        const now           = new Date();
+
+        if (selectedGrade === assignedGrade || isAdmin) { bookingHintWrapEl.classList.add('hidden'); return; }
+        if (now < open) {
+          bookingHintTextEl.innerHTML =
+            `타 학년은 <strong class="text-indigo-600">${open.getMonth()+1}월 ${open.getDate()}일 오전 7시</strong>부터 예약 가능`;
+          bookingHintWrapEl.classList.remove('hidden');
+        } else {
+          bookingHintWrapEl.classList.add('hidden');
+          bookingHintTextEl.textContent = '';
+        }
+      };
+
+      const renderCalendar = () => {
+        calendarHeadEl.innerHTML = '';
+        calendarBodyEl.innerHTML = '';
+
+        const monday = getMonday(currentDate);
+        const weekDates = [];
+
+        const weekStart = new Date(monday);
+        const weekEnd = new Date(monday); weekEnd.setDate(weekEnd.getDate()+4);
+        currentWeekEl.textContent = `${weekStart.getMonth()+1}.${weekStart.getDate()} ~ ${weekEnd.getMonth()+1}.${weekEnd.getDate()}`;
+
+        const assignedGrade = getAssignedGrade(currentDate);
+        assignedGradeEl.textContent = assignedGrade ? `${assignedGrade}학년` : '배정 없음';
+
+        const headRow = document.createElement('tr');
+        headRow.innerHTML = '<th class="w-48 py-3 border-b-2 border-gray-200"></th>';
+        for (let i=0;i<5;i++){
+          const dayDate = new Date(monday); dayDate.setDate(monday.getDate()+i);
+          weekDates.push(dayDate);
+          const th = document.createElement('th');
+          th.className = "py-3 border-b-2 border-gray-200";
+          th.innerHTML = `<span class="text-xl font-bold text-gray-800">${dayDate.getMonth()+1}/${dayDate.getDate()}</span><br><span class="text-base font-medium text-gray-500">(${daysOfWeek[i]})</span>`;
+          headRow.appendChild(th);
+        }
+        calendarHeadEl.appendChild(headRow);
+
+        // 배정학년에 따라 시간표 선택
+        let key;
+        if (assignedGrade >= 5) key='5-6';
+        else if (assignedGrade >= 3) key='3-4';
+        else if (assignedGrade >= 1) key='1-2';
+        else key='3-4';
+        const timetable = timetables[key];
+
+        // 9/1~9/10 방학 처리
+        const vacationEndDate = new Date('2025-09-10'); vacationEndDate.setHours(23,59,59,999);
+
+        timetable.forEach((period, periodIndex) => {
+          const row = document.createElement('tr');
+          row.className = "border-b border-gray-100";
+
+          const timeTd = document.createElement('td');
+          timeTd.className = "py-3 px-2 border-r border-gray-100 font-semibold text-gray-800 leading-tight";
+
+          const match = period.match(/(.*?)\s*\((.*)\)/);
+          if (match) timeTd.innerHTML = `<span class="text-lg">${match[1]}</span><br><span class="text-sm font-normal text-gray-500">(${match[2]})</span>`;
+          else timeTd.innerHTML = `<span class="text-lg">${period}</span>`;
+          row.appendChild(timeTd);
+
+          weekDates.forEach((date, dayIndex) => {
+            const cell = document.createElement('td');
+            const innerDiv = document.createElement('div');
+            innerDiv.className = "h-20 flex flex-col justify-center items-center rounded-lg";
+            const dateString = formatDate(date);
+            const holidayName = holidays[dateString];
+            const reservationKey = `${dateString}_${period}`;
+            const reservation = reservations[reservationKey];
+
+            cell.dataset.date = dateString;
+            cell.dataset.period = period;
+
+            if (date <= vacationEndDate || holidayName === '여름방학') {
+              cell.className = "py-2 px-1";
+              innerDiv.classList.add('disabled-slot','text-red-500','font-bold');
+              innerDiv.textContent = '여름방학';
+            } else if (holidayName) {
+              cell.className = "py-2 px-1";
+              innerDiv.classList.add('disabled-slot','text-red-500','font-bold');
+              innerDiv.textContent = holidayName;
+            } else if (dayIndex === 2 && /6교시/.test(period)) { // 수요일 6교시 금지
+              cell.className = "py-2 px-1";
+              innerDiv.classList.add('disabled-slot');
+              innerDiv.textContent = '예약 불가';
+            } else if (reservation) {
+              cell.className = "py-2 px-1 relative cursor-pointer";
+              innerDiv.classList.add('bg-indigo-200','text-indigo-800','hover:bg-indigo-300','transition-colors');
+              innerDiv.innerHTML = `<span class="font-bold text-base">${reservation.gradeClass}</span><span class="text-sm mt-1 break-words px-1">${reservation.purpose}</span>`;
+            } else {
+              cell.className = "py-2 px-1 relative cursor-pointer";
+              innerDiv.classList.add('bg-gray-50','hover:bg-green-100','transition-colors');
+              innerDiv.innerHTML = `<span class="text-gray-400 text-2xl">+</span>`;
+            }
+            cell.appendChild(innerDiv);
+            row.appendChild(cell);
+          });
+          calendarBodyEl.appendChild(row);
+        });
+      };
+
+      // 모달 helpers
+      const openModal = (el) => { el.classList.remove('hidden'); el.classList.add('flex'); setTimeout(() => { el.querySelector('div').classList.remove('scale-95'); }, 10); };
+      const closeModal = (el) => { el.querySelector('div').classList.add('scale-95'); setTimeout(() => { el.classList.add('hidden'); el.classList.remove('flex'); }, 300); };
+      const openAlertModal = (msg) => { alertMessageEl.innerHTML = msg; openModal(alertModal); };
+
+      // 이벤트
+      prevWeekBtn.addEventListener('click', () => { currentDate.setDate(currentDate.getDate()-7); renderCalendar(); });
+      nextWeekBtn.addEventListener('click', () => { currentDate.setDate(currentDate.getDate()+7); renderCalendar(); });
+
+      calendarBodyEl.addEventListener('click', (e) => {
+        const cell = e.target.closest('td[data-date]');
+        if (!cell || cell.querySelector('.disabled-slot')) return;
+
+        const { date, period } = cell.dataset;
+        const reservationKey = `${date}_${period}`;
+        const reservation = reservations[reservationKey];
+
+        const dateObj = new Date(date);
+        const dayOfWeek = ['일','월','화','수','목','금','토'][dateObj.getDay()];
+
+        if (reservation) {
+          // 삭제 모달
+          deleteModalDateInput.value = date;
+          deleteModalPeriodInput.value = period;
+          deleteModalDatetimeEl.textContent = `${dateObj.getMonth()+1}월 ${dateObj.getDate()}일 (${dayOfWeek}) ${period}`;
+          deleteModalGradeClassEl.textContent = reservation.gradeClass;
+          deleteModalPurposeEl.textContent = reservation.purpose;
+          deleteForm.reset();
+          openModal(deleteModal);
+        } else {
+          // 예약 모달
+          reservationForm.reset();
+          classInputEtcContainer.classList.add('hidden');
+          classInputEtc.required = false;
+
+          document.getElementById('modal-date').value = date;
+          document.getElementById('modal-period').value = period;
+          document.getElementById('modal-datetime').textContent = `${dateObj.getMonth()+1}월 ${dateObj.getDate()}일 (${dayOfWeek}) ${period}`;
+
+          openModal(reservationModal);
+          setTimeout(() => { try{ updateBookingHint(); }catch(e){ console.error(e); } }, 0);
+        }
+      });
+
+      // 폼 핸들링
+      classSelect.addEventListener('change', () => {
+        if (classSelect.value === 'etc') { classInputEtcContainer.classList.remove('hidden'); classInputEtc.required = true; }
+        else { classInputEtcContainer.classList.add('hidden'); classInputEtc.required = false; }
+        updateBookingHint();
+      });
+      gradeSelect.addEventListener('change', updateBookingHint);
+
+      reservationForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const selectedDate  = new Date(modalDateInput.value);
+        const assignedGrade = getAssignedGrade(selectedDate);
+        const selectedGrade = parseInt(gradeSelect.value);
+
+        if (!isAdmin) {
+          const now = new Date();
+          const openBookingDate = getOpenBookingDate(selectedDate);
+          if (selectedGrade !== assignedGrade && now < openBookingDate) {
+            const message = `타 학년은<br><strong class="text-indigo-600">${openBookingDate.getMonth()+1}월 ${openBookingDate.getDate()}일 오전 7시</strong><br>부터 예약 가능합니다.`;
+            openAlertModal(message);
+            return;
+          }
+        }
+
+        const date = modalDateInput.value;
+        const period = modalPeriodInput.value;
+
+        let className;
+        if (classSelect.value === 'etc') className = classInputEtc.value.trim();
+        else className = `${classSelect.value}반`;
+
+        const gradeClass = `${gradeSelect.value}학년 ${className}`;
+        const purpose = purposeInput.value.trim();
+        const password = passwordInput.value.trim();
+
+        if (!purpose || !password || password.length !== 4 || !/^\d{4}$/.test(password)) {
+          openAlertModal('입력값을 확인해주세요. (목적, 비밀번호 4자리)');
+          return;
+        }
+
+        const reservationKey = `${date}_${period}`;
+        const reservationData = { gradeClass, purpose, password };
+
+        try {
+          const docSnap = await getDocFromServer(doc(reservationsCol, reservationKey));
+          if (docSnap.exists()) {
+            openAlertModal("다른 사용자가 먼저 예약했습니다.<br>페이지가 곧 새로고침됩니다.");
+          } else {
+            await setDoc(doc(reservationsCol, reservationKey), reservationData);
+            closeModal(reservationModal);
+          }
+        } catch (error) {
+          console.error("Error adding document: ", error);
+          openAlertModal("예약 중 오류가 발생했습니다.");
+        }
+      });
+
+      // 삭제
+      deleteForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const date = deleteModalDateInput.value;
+        const period = deleteModalPeriodInput.value;
+        const password = deletePasswordInput.value.trim();
+        const reservationKey = `${date}_${period}`;
+
+        const docSnap = await getDocFromServer(doc(reservationsCol, reservationKey));
+        if (docSnap.exists() && (docSnap.data().password === password || isAdmin)) {
+          try { await deleteDoc(doc(reservationsCol, reservationKey)); closeModal(deleteModal); }
+          catch (error) { console.error("Error removing document: ", error); openAlertModal("삭제 중 오류가 발생했습니다."); }
+        } else {
+          openAlertModal('비밀번호가 일치하지 않습니다.');
+        }
+      });
+
+      // 관리자
+      adminLoginButton.addEventListener('click', () => openModal(adminModal));
+      adminForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (adminPasswordInput.value === "school0000") { isAdmin = true; adminIndicator.classList.remove('hidden'); closeModal(adminModal); adminForm.reset(); }
+        else { openAlertModal("관리자 암호가 올바르지 않습니다."); }
+      });
+      adminIndicator.addEventListener('click', () => { isAdmin = false; adminIndicator.classList.add('hidden'); openAlertModal("관리자 모드가 종료되었습니다."); });
+
+      // 모달 닫기
+      document.getElementById('cancel-button').addEventListener('click', () => closeModal(reservationModal));
+      document.getElementById('delete-cancel-button').addEventListener('click', () => closeModal(deleteModal));
+      document.getElementById('admin-cancel-button').addEventListener('click', () => closeModal(adminModal));
+      document.getElementById('alert-close-button').addEventListener('click', () => closeModal(alertModal));
+      reservationModal.addEventListener('click', (e) => { if (e.target === reservationModal) closeModal(reservationModal); });
+      deleteModal.addEventListener('click', (e) => { if (e.target === deleteModal) closeModal(deleteModal); });
+      alertModal.addEventListener('click', (e) => { if (e.target === alertModal) closeModal(alertModal); });
+
+      // Firebase init + 실시간 반영
+      const initializeFirebase = async () => {
+        if (firebaseConfig.apiKey === "YOUR_API_KEY") {
+          openAlertModal("<strong class='text-red-500'>Firebase 설정 필요</strong><br><br>코드의 <code>firebaseConfig</code>를<br>dran-aad51 Web 앱 값으로 채우세요.");
+          loadingOverlay.classList.add('opacity-0'); setTimeout(() => loadingOverlay.style.display='none', 300); return;
+        }
+        try {
+          await signInAnonymously(auth);
+          let isInitialLoad = true;
+          onSnapshot(reservationsCol, (querySnapshot) => {
+            const newReservations = {};
+            querySnapshot.forEach((doc) => { newReservations[doc.id] = doc.data(); });
+            reservations = newReservations;
+            renderCalendar();
+            if (isInitialLoad) { loadingOverlay.classList.add('opacity-0'); setTimeout(() => loadingOverlay.style.display='none', 300); isInitialLoad = false; }
+          }, (error) => {
+            console.error("Error listening to reservations: ", error);
+            openAlertModal("데이터를 불러오는 데 실패했습니다.<br>페이지를 새로고침 해주세요.");
+            loadingOverlay.classList.add('opacity-0'); setTimeout(() => loadingOverlay.style.display='none', 300);
+          });
+        } catch (error) {
+          console.error("Firebase initialization error:", error);
+          if (error.code === 'auth/operation-not-allowed') {
+            openAlertModal("익명 로그인이 비활성화되어 있습니다.<br><br><strong>해결:</strong> Firebase 콘솔 → Authentication → Sign-in method → 익명 사용 '활성화'");
+          } else {
+            openAlertModal("시스템 연결 오류가 발생했습니다. 새로고침 해주세요.");
+          }
+          loadingOverlay.classList.add('opacity-0'); setTimeout(() => loadingOverlay.style.display='none', 300);
+        }
+      };
+      initializeFirebase();
+    });
+  </script>
+</body>
+</html>
